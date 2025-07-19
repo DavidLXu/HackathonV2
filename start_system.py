@@ -16,6 +16,7 @@ class SmartFridgeSystem:
     def __init__(self):
         self.web_process = None
         self.button_process = None
+        self.face_detection_process = None
         self.running = False
         
     def start_web_interface(self):

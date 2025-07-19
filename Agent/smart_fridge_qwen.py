@@ -2,8 +2,16 @@ import dashscope
 import json
 import os
 import base64
+import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # 设置API密钥 - 从环境变量获取
 api_key = os.getenv('DASHSCOPE_API_KEY')
@@ -272,17 +280,19 @@ class SmartFridgeQwenAgent:
 2. 判断这种物品的最佳存储温度（-18°C到10°C之间）
 3. 判断这种物品的保质期：
    - 如果是食物，返回具体的保质期天数（如：7、30等数字）
-   - 如果是非食物（如乐器、工具等），返回"长期"
+   - 如果是非食物（如乐器、工具、玩具等），返回"长期"
 4. 根据最佳温度选择最合适的冰箱层
 5. 在该层找到空闲的扇区
 6. 返回JSON格式的结果，包含：
-   - food_name: 物品名称
+   - food_name: 物品名称（保持VLM识别的原始名称，如"玩具车"、"小提琴"等）
    - optimal_temp: 最佳存储温度（数字，包括负数）
    - shelf_life_days: 保质期天数（数字，如7、30等，非食物返回"长期"）
    - category: 物品类别
    - level: 选择的层数
    - section: 选择的扇区
    - reasoning: 选择理由
+
+重要：food_name字段必须保持VLM识别的原始物品名称，不要修改为通用分类名称。
 
 重要提示：
 - 食物分类：请在以下分类中选择最合适的：
@@ -298,8 +308,15 @@ class SmartFridgeQwenAgent:
 
 分类优先级：
 - 三明治、汉堡、披萨、寿司等主食类食物优先分类为"谷物"
-- 只有真正的非食物（乐器、工具、书籍等）才分类为"非食物"
+- 只有真正的非食物（乐器、工具、书籍、玩具等）才分类为"非食物"
 - 食物都有保质期，非食物才是长期保存
+- 对于非食物物品，保持原始名称（如"玩具车"、"小提琴"等），不要改为"其他"
+
+识别优先级：
+- 优先识别为食物，除非明确看到乐器、工具、书籍等非食物物品
+- 如果图片模糊或无法识别，默认识别为"其他"食物
+- 不要轻易将物品识别为乐器，除非图片中明确显示乐器
+- 保留VLM的原始识别结果，不要强制修改物品名称
 
 重要：
 1. 请确保选择的层温度与物品的最佳存储温度匹配，水果蔬菜不要放在冷冻层！
@@ -319,6 +336,10 @@ class SmartFridgeQwenAgent:
             
             if not result["success"]:
                 return result
+            
+            # 添加调试信息
+            print(f"🔍 VLM原始响应: {result['response']}")
+            logger.info(f"🔍 VLM原始响应: {result['response']}")
             
             # 解析大模型的JSON响应
             try:

@@ -4,10 +4,12 @@
 智慧冰箱Web界面
 """
 
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, Response
 import json
 import os
 import logging
+import threading
+import time
 from datetime import datetime
 from smart_fridge_qwen import SmartFridgeQwenAgent
 
@@ -268,6 +270,26 @@ user_preferences = {
     "tools": False
 }
 
+# 全局变量存储物理按钮状态
+physical_button_status = {
+    "last_button_time": 0,
+    "last_button_type": None,
+    "last_action_result": None
+}
+
+# 全局变量存储SSE客户端
+sse_clients = []
+
+def notify_sse_clients(event_type, data):
+    """通知所有SSE客户端"""
+    message = f"data: {json.dumps({'type': event_type, 'data': data})}\n\n"
+    for client in sse_clients[:]:  # 复制列表避免修改时出错
+        try:
+            client.write(message)
+            client.flush()
+        except:
+            sse_clients.remove(client)
+
 @app.route('/api/recommendations')
 def get_recommendations():
     """获取推荐API"""
@@ -324,8 +346,11 @@ def get_recommendations():
 
 @app.route('/api/proximity-sensor', methods=['POST'])
 def proximity_sensor():
-    """接近传感器模拟API"""
+    """接近传感器模拟API - 由人脸检测触发"""
     try:
+        # 记录人脸检测事件
+        logger.info("👤 检测到人脸接近 - 触发接近传感器事件")
+        
         # 获取当前时间和用户偏好
         current_time = datetime.now()
         hour = current_time.hour
@@ -499,11 +524,15 @@ def place_item():
         # 调用冰箱Agent添加物品
         result = fridge.add_item_to_fridge(image_path)
         
-        # 清理临时文件
-        try:
-            os.remove(image_path)
-        except:
-            pass
+        # 更新物理按钮状态
+        global physical_button_status
+        physical_button_status["last_action_result"] = result
+        
+        # 通知SSE客户端操作完成
+        notify_sse_clients('action_completed', result)
+        
+        # 调试：不清理临时文件，保留图片用于检查
+        logger.info(f"🔍 保留临时图片文件用于调试: {image_path}")
         
         return jsonify(result)
         
@@ -530,12 +559,60 @@ def take_out():
     except Exception as e:
         return jsonify({"error": str(e)})
 
+@app.route('/api/physical-button-status', methods=['GET'])
+def get_physical_button_status():
+    """获取物理按钮状态API"""
+    global physical_button_status
+    return jsonify({
+        "success": True,
+        "last_button_time": physical_button_status["last_button_time"],
+        "last_button_type": physical_button_status["last_button_type"],
+        "last_action_result": physical_button_status["last_action_result"],
+        "button_type": physical_button_status["last_button_type"],
+        "action_result": physical_button_status["last_action_result"]
+    })
+
+@app.route('/api/events')
+def sse():
+    """Server-Sent Events端点"""
+    def generate():
+        # 发送连接确认
+        yield f"data: {json.dumps({'type': 'connected', 'data': {'message': 'SSE连接已建立'}})}\n\n"
+        
+        # 将客户端添加到列表
+        sse_clients.append(request.environ['wsgi.input'].stream)
+        
+        try:
+            while True:
+                # 保持连接活跃
+                yield f"data: {json.dumps({'type': 'ping', 'data': {'timestamp': time.time()}})}\n\n"
+                time.sleep(30)  # 每30秒发送一次ping
+        except:
+            # 客户端断开连接
+            if request.environ['wsgi.input'].stream in sse_clients:
+                sse_clients.remove(request.environ['wsgi.input'].stream)
+    
+    return Response(generate(), mimetype='text/event-stream')
+
 @app.route('/api/physical-button', methods=['POST'])
 def physical_button():
     """物理按键API - 处理物理按键触发"""
+    global physical_button_status
+    
     try:
         data = request.get_json()
         button_type = data.get('button_type')  # 'place' 或 'take_out'
+        
+        # 更新物理按钮状态
+        import time
+        physical_button_status["last_button_time"] = int(time.time() * 1000)
+        physical_button_status["last_button_type"] = button_type
+        
+        # 通知SSE客户端按钮被按下
+        notify_sse_clients('button_pressed', {
+            'button_type': button_type,
+            'timestamp': physical_button_status["last_button_time"]
+        })
         
         if button_type == 'place':
             # 处理放入物品
@@ -561,6 +638,16 @@ def physical_button():
                     "current_items": total_items,
                     "max_capacity": max_capacity
                 })
+            
+            # 更新物理按钮状态
+            physical_button_status["last_action_result"] = {
+                "success": True,
+                "message": "请将要放入的物品放在摄像头前，系统将自动识别并存储",
+                "action": "place_item",
+                "current_items": total_items,
+                "max_capacity": max_capacity,
+                "available_space": max_capacity - total_items
+            }
             
             # 返回放入物品的指导信息
             return jsonify({
@@ -602,19 +689,36 @@ def physical_button():
                 item_to_take = expired_items[0]
                 result = fridge.get_item_from_fridge(item_to_take["item_id"])
                 
-                return jsonify({
+                # 更新物理按钮状态
+                action_result = {
                     "success": True,
                     "message": f"已取出已过期的物品：{item_to_take['name']}",
                     "action": "take_out_item",
                     "item": item_to_take,
                     "priority": "expired",
                     "result": result
-                })
+                }
+                physical_button_status["last_action_result"] = action_result
+                
+                # 通知SSE客户端操作完成
+                notify_sse_clients('action_completed', action_result)
+                
+                return jsonify(action_result)
             
             # 其次取出即将过期的物品
             elif expiring_items:
                 item_to_take = expiring_items[0]
                 result = fridge.get_item_from_fridge(item_to_take["item_id"])
+                
+                # 更新物理按钮状态
+                physical_button_status["last_action_result"] = {
+                    "success": True,
+                    "message": f"已取出即将过期的物品：{item_to_take['name']}（剩余{item_to_take['days_remaining']}天）",
+                    "action": "take_out_item",
+                    "item": item_to_take,
+                    "priority": "expiring_soon",
+                    "result": result
+                }
                 
                 return jsonify({
                     "success": True,
@@ -632,6 +736,16 @@ def physical_button():
                 item_to_take = fresh_items[0]
                 result = fridge.get_item_from_fridge(item_to_take["item_id"])
                 
+                # 更新物理按钮状态
+                physical_button_status["last_action_result"] = {
+                    "success": True,
+                    "message": f"已取出物品：{item_to_take['name']}（剩余{item_to_take['days_remaining']}天）",
+                    "action": "take_out_item",
+                    "item": item_to_take,
+                    "priority": "oldest",
+                    "result": result
+                }
+                
                 return jsonify({
                     "success": True,
                     "message": f"已取出物品：{item_to_take['name']}（剩余{item_to_take['days_remaining']}天）",
@@ -642,6 +756,15 @@ def physical_button():
                 })
             
             else:
+                # 更新物理按钮状态
+                physical_button_status["last_action_result"] = {
+                    "success": True,
+                    "message": "冰箱中没有物品需要取出",
+                    "action": "take_out_item",
+                    "item": None,
+                    "priority": "empty"
+                }
+                
                 return jsonify({
                     "success": True,
                     "message": "冰箱中没有物品需要取出",

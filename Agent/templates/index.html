@@ -822,7 +822,151 @@
             setInterval(refreshData, 30000);
             // 每60秒自动刷新推荐
             setInterval(updateRecommendations, 60000);
+            // 建立SSE连接
+            connectSSE();
         });
+        
+        // 建立SSE连接
+        let eventSource = null;
+        
+        function connectSSE() {
+            eventSource = new EventSource('/api/events');
+            
+            eventSource.onopen = function(event) {
+                console.log('SSE连接已建立');
+            };
+            
+            eventSource.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    console.log('收到SSE事件:', data);
+                    
+                    if (data.type === 'button_pressed') {
+                        // 按钮被按下，立即显示通知
+                        handleButtonPressed(data.data);
+                    } else if (data.type === 'action_completed') {
+                        // 操作完成，显示结果
+                        handleActionCompleted(data.data);
+                    }
+                } catch (error) {
+                    console.error('解析SSE数据失败:', error);
+                }
+            };
+            
+            eventSource.onerror = function(event) {
+                console.error('SSE连接错误:', event);
+                // 尝试重新连接
+                setTimeout(connectSSE, 5000);
+            };
+        }
+        
+        // 处理按钮按下事件
+        function handleButtonPressed(data) {
+            if (data.button_type === 'place') {
+                showPhysicalButtonNotification('📸 正在拍照识别物品...', 'info');
+            } else if (data.button_type === 'take_out') {
+                showPhysicalButtonNotification('🔄 正在取出物品...', 'info');
+            }
+        }
+        
+        // 处理操作完成事件
+        function handleActionCompleted(data) {
+            if (data.success) {
+                showPhysicalButtonNotification(data.message, 'success');
+                refreshData();
+            } else {
+                showPhysicalButtonNotification(data.error || '操作失败', 'danger');
+            }
+        }
+        
+        // 检查物理按钮事件（保留作为备用）
+        let lastButtonTime = 0;
+        function checkPhysicalButton() {
+            fetch('/api/physical-button-status')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success && data.last_button_time > lastButtonTime) {
+                        lastButtonTime = data.last_button_time;
+                        // 使用实际结果处理函数
+                        handleRealPhysicalButtonEvent(data);
+                    }
+                })
+                .catch(error => {
+                    // 忽略错误，继续轮询
+                });
+        }
+        
+        // 处理物理按钮事件
+        function handlePhysicalButtonEvent(data) {
+            if (data.button_type === 'place') {
+                // 显示拍照提示
+                showPhysicalButtonNotification('📸 正在拍照识别物品...', 'info');
+                
+                // 模拟拍照过程
+                setTimeout(() => {
+                    // 刷新数据以显示新添加的物品
+                    refreshData();
+                    showPhysicalButtonNotification('✅ 物品已成功放入冰箱！', 'success');
+                }, 3000);
+            } else if (data.button_type === 'take_out') {
+                showPhysicalButtonNotification('🔄 正在取出物品...', 'info');
+                setTimeout(() => {
+                    refreshData();
+                    showPhysicalButtonNotification('✅ 物品已成功取出！', 'success');
+                }, 2000);
+            }
+        }
+        
+        // 处理实际的物理按钮事件（从后端获取结果）
+        function handleRealPhysicalButtonEvent(data) {
+            if (data.button_type === 'place') {
+                if (data.action_result && data.action_result.success) {
+                    const message = data.action_result.message || '物品已成功放入冰箱！';
+                    showPhysicalButtonNotification(message, 'success');
+                    refreshData();
+                } else {
+                    showPhysicalButtonNotification('❌ 放入物品失败', 'danger');
+                }
+            } else if (data.button_type === 'take_out') {
+                if (data.action_result && data.action_result.success) {
+                    const message = data.action_result.message || '物品已成功取出！';
+                    showPhysicalButtonNotification(message, 'success');
+                    refreshData();
+                } else {
+                    showPhysicalButtonNotification('❌ 取出物品失败', 'danger');
+                }
+            }
+        }
+        
+        // 显示物理按钮通知
+        function showPhysicalButtonNotification(message, type) {
+            // 创建通知元素
+            const notification = document.createElement('div');
+            notification.className = `alert alert-${type === 'success' ? 'success' : 'info'} alert-dismissible fade show`;
+            notification.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                z-index: 9999;
+                min-width: 300px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            `;
+            notification.innerHTML = `
+                <strong>${type === 'success' ? '✅' : '📸'} 物理按钮</strong><br>
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+            
+            // 添加到页面
+            document.body.appendChild(notification);
+            
+            // 3秒后自动移除
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.remove();
+                }
+            }, 3000);
+        }
         
         // 刷新数据
         function refreshData() {
