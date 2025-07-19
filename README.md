@@ -25,4 +25,30 @@ Agent 功能点3
 
 所有的逻辑全都用大模型调用来实现，包括食材推荐，把目前冰箱物品的状态和用户偏好上传，让大模型进行推理，不要在本地写规则。
 
-API Key: sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+## Setup
+
+### Environment Variables
+
+1. Set your DashScope API key as an environment variable:
+   ```bash
+   export DASHSCOPE_API_KEY="your_api_key_here"
+   ```
+   
+   Or create a `.env` file in the project root:
+   ```
+   DASHSCOPE_API_KEY=your_api_key_here
+   ```
+
+2. Get your API key from: https://dashscope.console.aliyun.com/
+
+### Installation
+
+1. Install required packages:
+   ```bash
+   pip install dashscope flask
+   ```
+
+2. Run the application:
+   ```bash
+   python web_interface.py
+   ```
