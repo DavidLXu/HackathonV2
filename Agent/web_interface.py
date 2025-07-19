@@ -7,8 +7,16 @@
 from flask import Flask, render_template, jsonify, request
 import json
 import os
+import logging
 from datetime import datetime
 from smart_fridge_qwen import SmartFridgeQwenAgent
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 fridge = SmartFridgeQwenAgent()
@@ -521,6 +529,138 @@ def take_out():
         
     except Exception as e:
         return jsonify({"error": str(e)})
+
+@app.route('/api/physical-button', methods=['POST'])
+def physical_button():
+    """物理按键API - 处理物理按键触发"""
+    try:
+        data = request.get_json()
+        button_type = data.get('button_type')  # 'place' 或 'take_out'
+        
+        if button_type == 'place':
+            # 处理放入物品
+            logger.info("物理按键触发：放入物品")
+            
+            # 获取冰箱状态
+            inventory_result = fridge.get_fridge_inventory()
+            if not inventory_result["success"]:
+                return jsonify({
+                    "success": False,
+                    "error": "获取冰箱状态失败"
+                })
+            
+            # 检查冰箱是否已满
+            total_items = inventory_result["total_items"]
+            max_capacity = 20  # 假设最大容量为20个物品
+            
+            if total_items >= max_capacity:
+                return jsonify({
+                    "success": False,
+                    "message": "冰箱已满，请先清理一些物品",
+                    "action": "place_item",
+                    "current_items": total_items,
+                    "max_capacity": max_capacity
+                })
+            
+            # 返回放入物品的指导信息
+            return jsonify({
+                "success": True,
+                "message": "请将要放入的物品放在摄像头前，系统将自动识别并存储",
+                "action": "place_item",
+                "current_items": total_items,
+                "max_capacity": max_capacity,
+                "available_space": max_capacity - total_items
+            })
+            
+        elif button_type == 'take_out':
+            # 处理取出物品
+            logger.info("物理按键触发：取出物品")
+            
+            # 获取冰箱状态
+            inventory_result = fridge.get_fridge_inventory()
+            if not inventory_result["success"]:
+                return jsonify({
+                    "success": False,
+                    "error": "获取冰箱状态失败"
+                })
+            
+            # 查找即将过期的物品
+            expiring_items = []
+            expired_items = []
+            fresh_items = []
+            
+            for item in inventory_result["inventory"]:
+                if item.get("is_expired"):
+                    expired_items.append(item)
+                elif item.get("days_remaining", 0) <= 2:
+                    expiring_items.append(item)
+                else:
+                    fresh_items.append(item)
+            
+            # 优先取出已过期的物品
+            if expired_items:
+                item_to_take = expired_items[0]
+                result = fridge.get_item_from_fridge(item_to_take["item_id"])
+                
+                return jsonify({
+                    "success": True,
+                    "message": f"已取出已过期的物品：{item_to_take['name']}",
+                    "action": "take_out_item",
+                    "item": item_to_take,
+                    "priority": "expired",
+                    "result": result
+                })
+            
+            # 其次取出即将过期的物品
+            elif expiring_items:
+                item_to_take = expiring_items[0]
+                result = fridge.get_item_from_fridge(item_to_take["item_id"])
+                
+                return jsonify({
+                    "success": True,
+                    "message": f"已取出即将过期的物品：{item_to_take['name']}（剩余{item_to_take['days_remaining']}天）",
+                    "action": "take_out_item",
+                    "item": item_to_take,
+                    "priority": "expiring_soon",
+                    "result": result
+                })
+            
+            # 如果没有过期或即将过期的物品，取出最老的物品
+            elif fresh_items:
+                # 按添加时间排序，取出最老的物品
+                fresh_items.sort(key=lambda x: x.get("added_time", ""))
+                item_to_take = fresh_items[0]
+                result = fridge.get_item_from_fridge(item_to_take["item_id"])
+                
+                return jsonify({
+                    "success": True,
+                    "message": f"已取出物品：{item_to_take['name']}（剩余{item_to_take['days_remaining']}天）",
+                    "action": "take_out_item",
+                    "item": item_to_take,
+                    "priority": "oldest",
+                    "result": result
+                })
+            
+            else:
+                return jsonify({
+                    "success": True,
+                    "message": "冰箱中没有物品需要取出",
+                    "action": "take_out_item",
+                    "item": None,
+                    "priority": "empty"
+                })
+        else:
+            return jsonify({
+                "success": False,
+                "error": "无效的按键类型"
+            })
+            
+    except Exception as e:
+        logger.error(f"物理按键处理失败: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        })
 
 @app.route('/api/user-preferences', methods=['GET', 'POST'])
 def user_preferences_api():
