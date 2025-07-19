@@ -3,6 +3,10 @@ import json
 import os
 import base64
 import logging
+import cv2
+import numpy as np
+import time
+import threading
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
@@ -14,6 +18,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 设置API密钥 - 从环境变量获取
+os.environ['DASHSCOPE_API_KEY'] = 'sk-0419b645f1d4499da2094c863442e0db'
+
 api_key = os.getenv('DASHSCOPE_API_KEY')
 if not api_key:
     raise ValueError("Please set the DASHSCOPE_API_KEY environment variable")
@@ -34,8 +40,164 @@ class SmartFridgeQwenAgent:
             4: 10    # 最顶层：10°C (冷藏)
         }
         
+        # 人脸检测配置
+        self.face_detection_enabled = True
+        self.face_detection_thread = None
+        self.face_detection_running = False
+        self.last_face_detection_time = 0
+        self.face_detection_cooldown = 3.0  # 3秒冷却时间
+        
+        # 人脸检测参数
+        self.REFERENCE_FACE_WIDTH = 150  # 像素
+        self.REFERENCE_DISTANCE = 50  # 厘米
+        self.DETECTION_DISTANCE = 50  # 检测距离阈值
+        
+        # 初始化摄像头
+        self.cap = None
+        self.face_cascade = None
+        self.init_face_detection()
+        
         # 加载冰箱数据
         self.fridge_data = self.load_fridge_data()
+    
+    def init_face_detection(self):
+        """初始化人脸检测"""
+        try:
+            # 初始化摄像头
+            self.cap = cv2.VideoCapture(0)
+            if not self.cap.isOpened():
+                logger.warning("无法打开摄像头，人脸检测功能将被禁用")
+                self.face_detection_enabled = False
+                self.cap = None
+                return
+            
+            # 加载人脸检测器
+            self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+            if self.face_cascade.empty():
+                logger.warning("无法加载人脸检测器，人脸检测功能将被禁用")
+                self.face_detection_enabled = False
+                return
+            
+            logger.info("人脸检测初始化成功")
+            
+        except Exception as e:
+            logger.error(f"人脸检测初始化失败: {e}")
+            self.face_detection_enabled = False
+    
+    def estimate_distance(self, face_width: int) -> float:
+        """根据人脸框宽度估算距离"""
+        if face_width <= 0:
+            return float('inf')
+        # 使用简单的反比例关系估算距离
+        distance = (self.REFERENCE_FACE_WIDTH * self.REFERENCE_DISTANCE) / face_width
+        return distance
+    
+    def detect_faces(self) -> bool:
+        """检测人脸并判断是否触发接近事件"""
+        if not self.face_detection_enabled or self.cap is None:
+            return False
+        
+        try:
+            ret, frame = self.cap.read()
+            if not ret:
+                return False
+            
+            # 转换为灰度图
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            
+            # 检测人脸
+            faces = self.face_cascade.detectMultiScale(
+                gray,
+                scaleFactor=1.1,
+                minNeighbors=5,
+                minSize=(30, 30)
+            )
+            
+            # 检查是否需要触发事件
+            if len(faces) >= 1:
+                for (x, y, w, h) in faces:
+                    distance = self.estimate_distance(w)
+                    if distance <= self.DETECTION_DISTANCE:
+                        return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"人脸检测出错: {e}")
+            return False
+    
+    def start_face_detection_monitor(self):
+        """启动人脸检测监控线程"""
+        if not self.face_detection_enabled:
+            logger.warning("人脸检测功能已禁用")
+            return
+        
+        if self.face_detection_running:
+            logger.warning("人脸检测监控已在运行")
+            return
+        
+        self.face_detection_running = True
+        self.face_detection_thread = threading.Thread(target=self._face_detection_loop, daemon=True)
+        self.face_detection_thread.start()
+        logger.info("人脸检测监控已启动")
+    
+    def stop_face_detection_monitor(self):
+        """停止人脸检测监控"""
+        self.face_detection_running = False
+        if self.face_detection_thread:
+            self.face_detection_thread.join(timeout=2)
+        logger.info("人脸检测监控已停止")
+    
+    def _face_detection_loop(self):
+        """人脸检测循环"""
+        while self.face_detection_running:
+            try:
+                if self.detect_faces():
+                    current_time = time.time()
+                    
+                    # 防抖检查
+                    if current_time - self.last_face_detection_time >= self.face_detection_cooldown:
+                        self.last_face_detection_time = current_time
+                        logger.info("👤 检测到人脸接近 - 触发接近传感器事件")
+                        
+                        # 这里可以添加触发接近传感器事件的逻辑
+                        # 例如：调用Web API、发送通知等
+                        self._trigger_proximity_event()
+                
+                time.sleep(0.1)  # 短暂休眠以减少CPU使用
+                
+            except Exception as e:
+                logger.error(f"人脸检测循环出错: {e}")
+                time.sleep(1)
+    
+    def _trigger_proximity_event(self):
+        """触发接近传感器事件"""
+        try:
+            # 这里可以添加具体的接近传感器事件处理逻辑
+            # 例如：发送WebSocket消息、调用API等
+            logger.info("触发接近传感器事件")
+            
+            # 可以在这里添加个性化推荐逻辑
+            current_time = datetime.now()
+            hour = current_time.hour
+            
+            if 6 <= hour < 12:
+                greeting = "早上好！"
+                recommendation = "建议食用新鲜水果补充维生素"
+            elif 12 <= hour < 18:
+                greeting = "下午好！"
+                recommendation = "下午茶时间，可以享用冰箱里的新鲜食物"
+            else:
+                greeting = "晚上好！"
+                recommendation = "注意检查过期食物"
+            
+            logger.info(f"个性化推荐: {greeting} {recommendation}")
+            
+            # 如果需要调用Web API，可以在这里添加
+            # 例如：发送HTTP请求到Web服务器
+            
+        except Exception as e:
+            logger.error(f"触发接近传感器事件失败: {e}")
     
     def load_fridge_data(self) -> Dict:
         """加载冰箱库存数据"""
@@ -694,6 +856,10 @@ def main():
     
     print("=== 智慧冰箱Qwen Agent启动 ===")
     
+    # 启动人脸检测监控
+    print("\n启动人脸检测监控...")
+    fridge.start_face_detection_monitor()
+    
     # 演示添加物品
     print("\n1. 添加物品到冰箱")
     if os.path.exists("some_food.jpg"):
@@ -713,6 +879,17 @@ def main():
     print(f"推荐信息: {recommendations}")
     
     print("\n=== 智慧冰箱Qwen Agent演示完成 ===")
+    print("人脸检测监控正在后台运行...")
+    print("按 Ctrl+C 停止程序")
+    
+    try:
+        # 保持程序运行
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n正在停止人脸检测监控...")
+        fridge.stop_face_detection_monitor()
+        print("程序已停止")
 
 if __name__ == "__main__":
     main() 

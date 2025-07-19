@@ -45,10 +45,13 @@ if [ $? -ne 0 ]; then
     pip install flask dashscope requests RPi.GPIO
 fi
 
+# 创建日志目录
+mkdir -p "$SCRIPT_DIR/logs"
+
 # 启动Web界面
 echo "🌐 启动Web界面..."
 cd "$SCRIPT_DIR/Agent"
-python web_interface.py &
+python web_interface.py > "$SCRIPT_DIR/logs/web_interface.log" 2>&1 &
 WEB_PID=$!
 echo "✅ Web界面已启动 (PID: $WEB_PID)"
 
@@ -70,9 +73,30 @@ done
 # 启动按键检测
 echo "🔘 启动按键检测..."
 cd "$SCRIPT_DIR/Sensor"
-python button.py &
+python button.py > "$SCRIPT_DIR/logs/button.log" 2>&1 &
 BUTTON_PID=$!
 echo "✅ 按键检测已启动 (PID: $BUTTON_PID)"
+
+# 启动人脸检测
+echo "👤 启动人脸检测..."
+cd "$SCRIPT_DIR/Sensor"
+# 完全重定向所有输出，包括stdout和stderr
+python start_face_detection.py > "$SCRIPT_DIR/logs/face_detection.log" 2>&1 &
+FACE_PID=$!
+echo "✅ 人脸检测启动器已启动 (PID: $FACE_PID)"
+
+# 等待人脸检测进程稳定
+echo "⏳ 等待人脸检测进程稳定..."
+sleep 5
+
+# 检查人脸检测进程是否还在运行
+if ! kill -0 $FACE_PID 2>/dev/null; then
+    echo "⚠️  人脸检测进程已停止，尝试重启..."
+    cd "$SCRIPT_DIR/Sensor"
+    python start_face_detection.py > "$SCRIPT_DIR/logs/face_detection.log" 2>&1 &
+    FACE_PID=$!
+    echo "✅ 人脸检测已重启 (PID: $FACE_PID)"
+fi
 
 echo ""
 echo "🎉 系统启动完成！"
@@ -80,11 +104,40 @@ echo "📱 Web界面: http://localhost:8080"
 echo "🔘 物理按键:"
 echo "   - GPIO 16 (绿色): 放入物品"
 echo "   - GPIO 17 (红色): 取出物品"
+echo "👤 人脸检测: 自动触发接近传感器事件"
+echo ""
+echo "📋 日志文件位置:"
+echo "   - Web界面: logs/web_interface.log"
+echo "   - 按键检测: logs/button.log"
+echo "   - 人脸检测: logs/face_detection.log"
 echo ""
 echo "按 Ctrl+C 停止系统"
 
 # 等待中断信号
-trap 'echo ""; echo "🛑 正在停止系统..."; kill $WEB_PID $BUTTON_PID 2>/dev/null; echo "✅ 系统已停止"; exit 0' INT TERM
+trap 'echo ""; echo "🛑 正在停止系统..."; kill $WEB_PID $BUTTON_PID $FACE_PID 2>/dev/null; echo "✅ 系统已停止"; exit 0' INT TERM
 
-# 保持运行
-wait 
+# 监控进程状态
+while true; do
+    # 检查Web进程
+    if ! kill -0 $WEB_PID 2>/dev/null; then
+        echo "⚠️  Web进程已停止"
+        break
+    fi
+    
+    # 检查按键进程
+    if ! kill -0 $BUTTON_PID 2>/dev/null; then
+        echo "⚠️  按键进程已停止"
+        break
+    fi
+    
+    # 检查人脸检测进程
+    if ! kill -0 $FACE_PID 2>/dev/null; then
+        echo "⚠️  人脸检测进程已停止，尝试重启..."
+        cd "$SCRIPT_DIR/Sensor"
+        python face_detection.py --headless &
+        FACE_PID=$!
+        echo "✅ 人脸检测已重启 (PID: $FACE_PID)"
+    fi
+    
+    sleep 5
+done 

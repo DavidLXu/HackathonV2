@@ -38,7 +38,8 @@ class FaceDetector:
         # 初始化串口
         try:
             self.serial_port = serial.Serial(serial_port, baud_rate)
-            print(f"串口 {serial_port} 已成功打开")
+            # 减少输出，避免日志混乱
+            # print(f"串口 {serial_port} 已成功打开")
         except Exception as e:
             print(f"串口打开失败：{str(e)}")
             self.serial_port = None
@@ -54,7 +55,8 @@ class FaceDetector:
         if self.serial_port and self.serial_port.is_open:
             try:
                 self.serial_port.write(b'event_camera')
-                print("已发送事件信号")
+                # 减少输出，避免日志混乱
+                # print("已发送事件信号")
             except Exception as e:
                 print(f"发送串口数据失败：{str(e)}")
     
@@ -64,7 +66,8 @@ class FaceDetector:
         
         # 防抖检查
         if current_time - self.last_event_time < self.event_cooldown:
-            print(f"⏰ 接近事件被忽略 - 冷却时间未到 (剩余{self.event_cooldown - (current_time - self.last_event_time):.1f}秒)")
+            # 减少输出，避免日志混乱
+            # print(f"⏰ 接近事件被忽略 - 冷却时间未到 (剩余{self.event_cooldown - (current_time - self.last_event_time):.1f}秒)")
             return
         
         self.last_event_time = current_time
@@ -79,7 +82,8 @@ class FaceDetector:
             
             if response.status_code == 200:
                 data = response.json()
-                print(f"✅ 接近传感器事件触发成功: {data.get('recommendation', {}).get('greeting', '')}")
+                # 减少输出，避免日志混乱
+                # print(f"✅ 接近传感器事件触发成功: {data.get('recommendation', {}).get('greeting', '')}")
             else:
                 self.logger.error(f"Web服务器响应异常: {response.status_code}")
         except requests.exceptions.RequestException as e:
@@ -139,22 +143,32 @@ class FaceDetector:
     def run(self, headless=False):
         """运行人脸检测程序"""
         try:
-            while True:
-                frame = self.detect_and_count_faces()
-                if frame is None:
-                    break
-
-                if not headless:
-                    cv2.imshow('Face Detection', frame)
-                    # 按'q'键退出
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
+            # 如果没有摄像头，模拟检测事件
+            if self.cap is None:
+                print("⚠️  摄像头不可用，将模拟人脸检测事件")
+                while True:
+                    # 模拟每30秒触发一次接近事件
+                    time.sleep(30)
+                    print("🔍 模拟人脸检测事件...")
+                    self.send_web_event()
+            else:
+                while True:
+                    frame = self.detect_and_count_faces()
+                    if frame is None:
                         break
-                else:
-                    # 无头模式，只进行检测，不显示窗口
-                    time.sleep(0.1)  # 短暂休眠以减少CPU使用
+
+                    if not headless:
+                        cv2.imshow('Face Detection', frame)
+                        # 按'q'键退出
+                        if cv2.waitKey(1) & 0xFF == ord('q'):
+                            break
+                    else:
+                        # 无头模式，只进行检测，不显示窗口
+                        time.sleep(0.1)  # 短暂休眠以减少CPU使用
 
         finally:
-            self.cap.release()
+            if self.cap is not None:
+                self.cap.release()
             if not headless:
                 cv2.destroyAllWindows()
             if self.serial_port:
@@ -174,7 +188,8 @@ def main():
     headless = '--headless' in sys.argv
     
     if headless:
-        print("🔍 启动无头模式人脸检测...")
+        # 减少输出，避免日志混乱
+        # print("🔍 启动无头模式人脸检测...")
         detector.run(headless=True)
     else:
         print("🔍 启动GUI模式人脸检测...")

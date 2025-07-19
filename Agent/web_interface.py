@@ -23,6 +23,13 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 fridge = SmartFridgeQwenAgent()
 
+# 启动人脸检测监控
+try:
+    fridge.start_face_detection_monitor()
+    logger.info("人脸检测监控已启动")
+except Exception as e:
+    logger.warning(f"人脸检测监控启动失败: {e}")
+
 # 食物emoji映射
 FOOD_EMOJIS = {
     "苹果": "🍎",
@@ -346,7 +353,7 @@ def get_recommendations():
 
 @app.route('/api/proximity-sensor', methods=['POST'])
 def proximity_sensor():
-    """接近传感器模拟API - 由人脸检测触发"""
+    """接近传感器API - 由人脸检测触发"""
     try:
         # 记录人脸检测事件
         logger.info("👤 检测到人脸接近 - 触发接近传感器事件")

@@ -81,6 +81,75 @@ class SmartFridgeSystem:
             print(f"❌ 启动按键检测失败: {e}")
             return False
     
+    def start_face_detection(self):
+        """启动人脸检测"""
+        try:
+            print("👤 启动人脸检测...")
+            
+            # 激活虚拟环境并启动人脸检测
+            activate_script = os.path.expanduser('~/env/bin/activate')
+            if os.path.exists(activate_script):
+                # 使用bash激活虚拟环境并运行
+                cmd = f"source {activate_script} && cd Sensor && python face_detection.py --headless"
+                self.face_detection_process = subprocess.Popen(
+                    ['bash', '-c', cmd],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+            else:
+                # 如果没有虚拟环境，直接运行
+                self.face_detection_process = subprocess.Popen(
+                    ['python', 'face_detection.py', '--headless'],
+                    cwd='Sensor',
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+            
+            print(f"✅ 人脸检测已启动 (PID: {self.face_detection_process.pid})")
+            
+            # 等待进程稳定
+            time.sleep(3)
+            
+            # 检查进程是否还在运行
+            if self.face_detection_process.poll() is not None:
+                print("⚠️  人脸检测进程已停止，尝试重启...")
+                return self.restart_face_detection()
+            
+            return True
+        except Exception as e:
+            print(f"❌ 启动人脸检测失败: {e}")
+            return False
+    
+    def restart_face_detection(self):
+        """重启人脸检测"""
+        try:
+            if self.face_detection_process:
+                self.face_detection_process.terminate()
+                time.sleep(1)
+            
+            # 重新启动
+            activate_script = os.path.expanduser('~/env/bin/activate')
+            if os.path.exists(activate_script):
+                cmd = f"source {activate_script} && cd Sensor && python face_detection.py --headless"
+                self.face_detection_process = subprocess.Popen(
+                    ['bash', '-c', cmd],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+            else:
+                self.face_detection_process = subprocess.Popen(
+                    ['python', 'face_detection.py', '--headless'],
+                    cwd='Sensor',
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+            
+            print(f"✅ 人脸检测已重启 (PID: {self.face_detection_process.pid})")
+            return True
+        except Exception as e:
+            print(f"❌ 重启人脸检测失败: {e}")
+            return False
+    
     def wait_for_web_server(self, timeout=30):
         """等待Web服务器启动"""
         print("⏳ 等待Web服务器启动...")
@@ -112,6 +181,14 @@ class SmartFridgeSystem:
                 print("⚠️  按键检测进程已停止")
                 self.button_process = None
             
+            # 检查人脸检测进程
+            if self.face_detection_process and self.face_detection_process.poll() is not None:
+                print("⚠️  人脸检测进程已停止，尝试重启...")
+                if self.restart_face_detection():
+                    print("✅ 人脸检测重启成功")
+                else:
+                    print("❌ 人脸检测重启失败")
+            
             time.sleep(5)
     
     def start(self):
@@ -131,6 +208,10 @@ class SmartFridgeSystem:
         if not self.start_button_detector():
             return False
         
+        # 启动人脸检测
+        if not self.start_face_detection():
+            return False
+        
         self.running = True
         
         # 启动监控线程
@@ -142,6 +223,7 @@ class SmartFridgeSystem:
         print("🔘 物理按键:")
         print("   - GPIO 16 (绿色): 放入物品")
         print("   - GPIO 17 (红色): 取出物品")
+        print("👤 人脸检测: 自动触发接近传感器事件")
         print("\n按 Ctrl+C 停止系统")
         
         return True
@@ -150,6 +232,15 @@ class SmartFridgeSystem:
         """停止系统"""
         print("\n🛑 正在停止系统...")
         self.running = False
+        
+        # 停止人脸检测
+        if self.face_detection_process:
+            print("🛑 停止人脸检测...")
+            self.face_detection_process.terminate()
+            try:
+                self.face_detection_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.face_detection_process.kill()
         
         # 停止按键检测
         if self.button_process:
